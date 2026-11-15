@@ -93,10 +93,10 @@
   background: #f6f8fa;
 }
 
+/* 固定列宽：所有行的第 i 列宽度一致，保证跨行对齐 */
 .obf-res-cell {
-  flex: 0 0 auto;
-  min-width: 110px;
-  max-width: 260px;
+  flex: 0 0 150px;
+  width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
   padding: 3px 8px;
@@ -105,7 +105,10 @@
 }
 
 .obf-res-idx {
-  min-width: 32px;
+  flex: 0 0 36px;
+  width: 36px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   text-align: right;
   color: #888;
   padding: 3px 4px;
