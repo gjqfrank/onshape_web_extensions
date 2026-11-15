@@ -473,6 +473,8 @@
       this.matchedList = [];
       this.resultsEl = null;
       this.resultsOpen = false;
+      this.prevHasFilter = false;
+      this.scannedOnce = false;
       this.condEls = [];
       this.buildUI();
       this.refreshColumnOptions();
@@ -743,6 +745,13 @@
         }
       }
       this.matchedList = matchedList;
+      // 筛选状态切换时自动开合总览：激活筛选 → 展示全部匹配行；
+      // 清空筛选 → 收起。筛选不变期间的手动开合不受影响。
+      if (hasFilter !== this.prevHasFilter) {
+        this.prevHasFilter = hasFilter;
+        if (hasFilter && !this.resultsOpen) this.toggleResults();
+        else if (!hasFilter && this.resultsOpen) this.toggleResults();
+      }
       if (this.resultsOpen) this.renderResults();
       let matched = 0;
       for (const m of seen.values()) if (m) matched++;
@@ -787,29 +796,54 @@
       if (this.resultsOpen) this.renderResults();
     }
 
+    // 渲染匹配行总览表格：全部列 × 全部匹配行，数据来自快照缓存，
+    // 不受虚拟滚动限制——虚拟表格里滚出屏幕就销毁的行在这里一次性全列出。
     renderResults() {
       if (!this.resultsEl || this.disposed) return;
       while (this.resultsEl.firstChild) {
         this.resultsEl.removeChild(this.resultsEl.firstChild);
       }
       const list = this.matchedList || [];
+      const headers = (this.headers && this.headers.length) ? this.headers : [];
       if (!list.length) {
         this.resultsEl.appendChild(make('div', 'obf-result-empty', '无匹配行'));
+        this.appendScanHint();
         return;
       }
+      // 表头
+      if (headers.length) {
+        const head = make('div', 'obf-res-row obf-res-head');
+        head.appendChild(make('span', 'obf-res-cell obf-res-idx', '#'));
+        for (const h of headers) {
+          head.appendChild(make('span', 'obf-res-cell', h));
+        }
+        this.resultsEl.appendChild(head);
+      }
+      // 数据行
       const cap = 500; // 防止超大 BOM 一次性渲染过多 DOM
-      for (const entry of list.slice(0, cap)) {
-        const item = make('div', 'obf-result-item');
-        const texts = entry.texts.filter(t => t);
-        item.textContent = texts.slice(0, 3).join(' · ');
-        item.title = texts.join(' | ');
+      list.slice(0, cap).forEach((entry, idx) => {
+        const item = make('div', 'obf-res-row');
+        item.appendChild(make('span', 'obf-res-cell obf-res-idx', String(idx + 1)));
+        const n = headers.length || Math.max(entry.texts.length, 1);
+        for (let i = 0; i < n; i++) {
+          item.appendChild(make('span', 'obf-res-cell', entry.texts[i] || ''));
+        }
+        item.title = entry.texts.filter(t => t).join(' | ');
         item.addEventListener('click', () => this.jumpToRow(entry));
         this.resultsEl.appendChild(item);
-      }
+      });
       if (list.length > cap) {
         this.resultsEl.appendChild(make('div', 'obf-result-empty',
-          '… 其余 ' + (list.length - cap) + ' 行未显示'));
+          '… 其余 ' + (list.length - cap) + ' 行未显示（已包含在计数中）'));
       }
+      this.appendScanHint();
+    }
+
+    // 尚未做过全表扫描时提示数据可能不完整
+    appendScanHint() {
+      if (this.scannedOnce || !this.resultsEl) return;
+      this.resultsEl.appendChild(make('div', 'obf-result-hint',
+        '以上仅包含已加载到屏幕的行 · 点击「扫描全表」可收集并显示全部匹配行'));
     }
 
     // 尽力而为：按 Item 编号估算行位置并滚动过去（行高从当前渲染行测量）
@@ -887,9 +921,13 @@
         this.scanning = false;
         this.btnScan.textContent = UI_TEXT.scanAll;
         try { scroller.scrollTop = originTop; } catch (e) { /* ignore */ }
+        this.scannedOnce = true; // 先置位：结束后的重渲染不再显示"数据不完整"提示
         this.applyFilter(); // 只在结束时应用一次
         console.info('[BOM Filter] 全表扫描完成，共收集 ' +
           this.identityCache.size + ' 行（已记住）');
+        if (this.conditions.some(c => c.value.trim() !== '') && !this.resultsOpen) {
+          this.toggleResults();
+        }
       };
 
       const step = () => {
