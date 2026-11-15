@@ -267,6 +267,88 @@
     }
   }
 
+  // 适配 Onshape 原生 os-table 组件（BOM 表的真实结构）：
+  // os-table.os-bom-table > .os-table > .os-colgroup-frozen / .os-colgroup-fluid，
+  // 每个列组各有独立的 .os-thead/.os-tbody/.os-tr；
+  // 一个逻辑行由各列组中同序号的 .os-tr 拼成，表头列按列组顺序拼接。
+  class OsTableAdapter {
+    constructor(root) {
+      this.root = root;
+    }
+
+    colgroups() {
+      const gs = Array.from(this.root.querySelectorAll('[class*="os-colgroup"]'));
+      return gs.length ? gs : [this.root];
+    }
+
+    headerCells() {
+      const cells = [];
+      for (const g of this.colgroups()) {
+        const thead = g.querySelector('.os-thead');
+        if (!thead) continue;
+        const hrows = thead.querySelectorAll('.os-tr');
+        const hr = hrows[hrows.length - 1];
+        if (!hr) continue;
+        for (const c of Array.from(hr.querySelectorAll('.os-th'))) cells.push(c);
+      }
+      return cells;
+    }
+
+    getHeaders() {
+      return this.headerCells().map(c => cachedText(c));
+    }
+
+    getRows() {
+      const groups = [];
+      for (const g of this.colgroups()) {
+        // 数据行 = 列组内不在表头中的 .os-tr（兼容任意 tbody 容器类名）
+        const rows = Array.from(g.querySelectorAll('.os-tr'))
+          .filter(tr => !tr.closest('.os-thead') && !tr.closest('.obf-root'));
+        if (rows.length) groups.push(rows);
+      }
+      if (!groups.length) return [];
+      const n = Math.min(...groups.map(r => r.length));
+      const rows = [];
+      for (let i = 0; i < n; i++) {
+        rows.push({ els: groups.map(r => r[i]) });
+      }
+      return rows;
+    }
+
+    cellsOf(row) {
+      if (!row._cells) {
+        const cells = [];
+        for (const tr of row.els) {
+          let cs = Array.from(tr.querySelectorAll('.os-td'));
+          if (!cs.length) cs = Array.from(tr.children);
+          cells.push(...cs);
+        }
+        row._cells = cells;
+      }
+      return row._cells;
+    }
+
+    getCellCount(row) {
+      return Math.max(this.cellsOf(row).length, 1);
+    }
+
+    getCellText(row, idx) {
+      const cells = this.cellsOf(row);
+      return cells[idx] ? cachedText(cells[idx]) : '';
+    }
+
+    setRowVisible(row, visible) {
+      for (const el of row.els) {
+        if (visible) el.style.removeProperty('display');
+        else el.style.setProperty('display', 'none', 'important');
+      }
+    }
+
+    setRowMatched(row, on) {
+      for (const el of row.els) el.classList.toggle('obf-match', on);
+    }
+  }
+
   /* ============================ 匹配逻辑 ============================ */
 
   function compileMatcher(cond, caseSensitive) {
@@ -620,7 +702,24 @@
       found.push({ host: table, adapter, root: container || table.parentElement });
     }
 
-    // 2) div 网格：优先类名/ID 含 bom 的容器（宽松阈值），
+    // 2) Onshape 原生 os-table 组件（BOM 表：冻结列 + 流动列拆分结构）
+    for (const el of Array.from(document.querySelectorAll('os-table, .os-table'))) {
+      if (el.closest('.obf-root')) continue;
+      if (el.hasAttribute('data-obf')) continue;
+      if (found.some(f => f.host.contains(el) || el.contains(f.host))) continue;
+      const adapter = new OsTableAdapter(el);
+      const headers = adapter.getHeaders();
+      if (headers.length < CONFIG.minColumns) continue;
+      const { matches, strong } = countKeywordMatches(headers);
+      const named = /bom/i.test(classText(el)) || !!findBomContainer(el);
+      const isBom = named
+        ? matches >= CONFIG.minHeaderMatchesInBomContainer
+        : (matches >= CONFIG.minHeaderMatches && strong);
+      log('os-table 候选', el, 'headers=', headers, '→', isBom);
+      if (isBom) found.push({ host: el, adapter, root: el });
+    }
+
+    // 3) div 网格：优先类名/ID 含 bom 的容器（宽松阈值），
     //    其次 role=grid/table 等网格语义元素（严格阈值）
     const containers = [];
     const seen = new Set();

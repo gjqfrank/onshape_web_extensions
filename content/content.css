@@ -190,3 +190,9 @@
 .obf-match > th {
   background: rgba(255, 214, 64, 0.35) !important;
 }
+
+/* Onshape os-table 的 os-tr 行（冻结列 + 流动列各自高亮） */
+.obf-match.os-tr,
+.obf-match.os-tr > * {
+  background: rgba(255, 214, 64, 0.35) !important;
+}
