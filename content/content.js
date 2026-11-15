@@ -290,6 +290,8 @@
 
     setRowMatched(row, on) {
       row.classList.toggle('obf-match', on);
+      // 单元格自带背景时可能盖住行高亮，同时高亮单元格
+      this.cellsOf(row).forEach(c => c.classList.toggle('obf-match', on));
     }
   }
 
@@ -415,7 +417,12 @@
     }
 
     setRowMatched(row, on) {
+      // Onshape 单元格自带背景色，只高亮行容器会被单元格盖住（高亮不全）；
+      // 把高亮类同时应用到行内的每个单元格，保证整行（含冻结列）都被高亮
       for (const el of row.els) el.classList.toggle('obf-match', on);
+      for (const cell of this.cellsOf(row)) {
+        cell.classList.toggle('obf-match', on);
+      }
     }
   }
 
