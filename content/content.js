@@ -125,6 +125,13 @@
     return sw;
   }
 
+  // 行数据中非空列的数量（用于保留信息更完整的快照）
+  function filled(texts) {
+    let n = 0;
+    for (const t of texts || []) if (t && t.trim()) n++;
+    return n;
+  }
+
   // Onshape 的 Appearance（外观）列只有色块（无文字描述）。
   // 找到单元格内第一个带不透明背景色的元素，把颜色提取为十六进制文本，
   // 使外观列可以像普通文字列一样被筛选和列举。无色块返回 null。
@@ -140,9 +147,13 @@
   }
 
   function cachedText(el) {
-    let t = textCache.get(el);
-    if (t === undefined) {
-      t = norm(el.textContent || '');
+    // 缓存条目 = { raw, text }。raw 为文本 + 输入框值的组合签名：
+    // Onshape 虚拟滚动可能复用同一 DOM 节点更新内容，签名变了必须重算，
+    // 否则会用旧数据判定匹配，留下不该显示的行。
+    const raw = (el.textContent || '') + currentInputs(el);
+    let c = textCache.get(el);
+    if (c === undefined || c.raw !== raw) {
+      let t = norm(el.textContent || '');
       // 可编辑单元格（如 Quantity）渲染为 <input>，其值不在 textContent 中
       try {
         const inputs = el.querySelectorAll('input, textarea');
@@ -158,9 +169,20 @@
           if (hex) t += (t ? ' ' : '') + hex;
         }
       } catch (e) { /* ignore */ }
-      textCache.set(el, t);
+      c = { raw, text: t };
+      textCache.set(el, c);
     }
-    return t;
+    return c.text;
+  }
+
+  // 单元格内输入框值的组合签名（用于检测内容变化、使缓存失效）
+  function currentInputs(el) {
+    let s = '';
+    try {
+      const inputs = el.querySelectorAll('input, textarea');
+      for (const inp of inputs) s += '\u0001' + (inp.value || '');
+    } catch (e) { /* ignore */ }
+    return s;
   }
 
   function classText(node) {
@@ -886,8 +908,11 @@
         const id = this.rowIdentity(texts);
         if (id) {
           seen.set(id, !hasFilter || ok);
-          // 同步快照缓存（虚拟滚动中滚动过的行不断补充）
-          if (!this.identityCache.has(id)) this.identityCache.set(id, texts);
+          // 同步快照缓存（虚拟滚动中滚动过的行不断补充）。
+          // 半渲染行（只填了部分列）与完整行标识相同：
+          // 保留信息更完整（非空列更多）的那份，避免产生"多余的一行"。
+          const prev = this.identityCache.get(id);
+          if (!prev || filled(prev) < filled(texts)) this.identityCache.set(id, texts);
           if (ok) matchedList.push({ id, texts });
         }
       }
@@ -899,7 +924,13 @@
           if (m) matchedList.push({ id, texts });
         }
       }
-      this.matchedList = matchedList;
+      // 按行标识去重：过渡态下 DOM 可能同时存在同一行的半渲染与完整版本
+      const uniq = new Map();
+      for (const e of matchedList) {
+        const prev = uniq.get(e.id);
+        if (!prev || filled(prev.texts) < filled(e.texts)) uniq.set(e.id, e);
+      }
+      this.matchedList = Array.from(uniq.values());
       // 筛选状态切换时自动开合总览：激活筛选 → 展示全部匹配行；
       // 清空筛选 → 收起。筛选不变期间的手动开合不受影响。
       if (hasFilter !== this.prevHasFilter) {
@@ -920,9 +951,11 @@
       return Array.from({ length: n }, (_, i) => this.adapter.getCellText(row, i));
     }
 
-    // 行标识：BOM 的 Item 编号在每行唯一；全部为空则返回 null
+    // 行标识：取 Item 编号（BOM 每行唯一，且在虚拟滚动的半渲染阶段
+    // 也会最先填好）。用整行拼接做标识会把"只渲染了一半"的行当成
+    // 额外的行缓存起来，导致筛选后总行数莫名 +1。Item 为空返回 null。
     rowIdentity(texts) {
-      const id = (texts || []).join('\u0000');
+      const id = (texts && texts[0] ? texts[0] : '').trim();
       return id.length ? id : null;
     }
 
