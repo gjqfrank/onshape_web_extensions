@@ -680,6 +680,36 @@
     return { matches, strong };
   }
 
+  // 判断候选 f 是否与 c（已挂载控制器或已入选候选）指向同一张表，需去重。
+  // Onshape 真实 DOM 中 contains() 关系与节点实例都可能不可靠（Angular
+  // 重渲染会创建新节点），这里叠加多重信号：包含关系、共享表头单元格、
+  // 几何重叠、bom 命名宿主优先。
+  function isDuplicateHost(c, f) {
+    try {
+      if (!c.host || !c.host.isConnected) return false;
+      if (c.host === f.host) return true;
+      if (c.host.contains(f.host) || f.host.contains(c.host)) return true;
+      if (c.adapter && f.adapter &&
+          samePhysicalTable(c.adapter, f.adapter)) return true;
+      // 几何去重：两宿主矩形重叠超过较小者的 50%
+      const r1 = c.host.getBoundingClientRect();
+      const r2 = f.host.getBoundingClientRect();
+      const area = r => Math.max(0, r.width) * Math.max(0, r.height);
+      const a1 = area(r1), a2 = area(r2);
+      if (a1 > 0 && a2 > 0) {
+        const iw = Math.min(r1.right, r2.right) - Math.max(r1.left, r2.left);
+        const ih = Math.min(r1.bottom, r2.bottom) - Math.max(r1.top, r2.top);
+        if (iw > 0 && ih > 0 && (iw * ih) / Math.min(a1, a2) > 0.5) return true;
+      }
+      // 已有 bom 命名宿主时，跳过泛化的 .os-table 候选
+      if (/bom/i.test(classText(c.host)) && !/bom/i.test(classText(f.host)) &&
+          f.adapter && typeof f.adapter.headerCells === 'function') return true;
+    } catch (e) {
+      return false;
+    }
+    return false;
+  }
+
   // 判断两个适配器是否指向同一张物理表格（共享表头单元格）。
   // Onshape 中 os-table 包装元素与内层 .os-table 网格元素的 contains()
   // 关系可能不可靠，需用此兜底去重，避免挂出两个筛选栏。
@@ -724,8 +754,7 @@
       if (el.closest('.obf-root')) continue;
       if (el.hasAttribute('data-obf')) continue;
       const adapter = new OsTableAdapter(el);
-      if (found.some(f => f.host.contains(el) || el.contains(f.host) ||
-                          samePhysicalTable(f.adapter, adapter))) continue;
+      if (found.some(ff => isDuplicateHost(ff, { host: el, adapter }))) continue;
       const headers = adapter.getHeaders();
       if (headers.length < CONFIG.minColumns) continue;
       const { matches, strong } = countKeywordMatches(headers);
@@ -781,6 +810,12 @@
       }
     }
 
+    // bom 命名宿主排在前面（去重时作为保留方）
+    found.sort((x, y) => {
+      const nx = /bom/i.test(classText(x.host)) ? 0 : 1;
+      const ny = /bom/i.test(classText(y.host)) ? 0 : 1;
+      return nx - ny;
+    });
     return found;
   }
 
@@ -794,14 +829,16 @@
     }
     // 为新出现的 BOM 表挂载筛选栏
     for (const f of findBomHosts()) {
-      let exists = false;
+      // 与所有已挂载控制器去重（覆盖 Angular 重渲染产生新节点、
+      // 外层 os-table 包装与内层 .os-table 网格并存等场景）
+      let dup = false;
       for (const c of controllers) {
-        if (c.host === f.host) {
-          exists = true;
+        if (isDuplicateHost(c, f)) {
+          dup = true;
           break;
         }
       }
-      if (exists) continue;
+      if (dup) continue;
       try {
         controllers.add(new BomFilterController(f.host, f.adapter, f.root));
         console.info('[BOM Filter] 已为 BOM 表挂载筛选栏:', f.host);
