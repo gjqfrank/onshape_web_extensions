@@ -747,8 +747,113 @@
         '  __obf.scan()            立即重新扫描页面并输出检测结果\n' +
         '  __obf.status()          查看当前已挂载的筛选栏\n' +
         '  __obf.attach(selector)  手动为指定表格/网格元素挂载筛选栏\n' +
+        '  __obf.inspect()         遍历所有同源 iframe，诊断 BOM 表的真实 DOM 结构\n' +
         '  __obf.setDebug(true)    开启详细检测日志'
       );
+    },
+    // 诊断：遍历当前文档 + 所有同源 iframe（含 shadow DOM），
+    // 找出疑似 BOM 表头文本并打印其 DOM 结构链，供开发者修正检测规则。
+    inspect() {
+      const KEYWORDS = ['item', 'item number', 'item no', 'quantity', 'qty',
+        'part number', 'part no', 'description', 'material',
+        '序号', '项目', '数量', '零件编号', '描述', '材料'];
+      const out = [];
+
+      const describe = (el) => {
+        let s = el.tagName ? el.tagName.toLowerCase() : '?';
+        if (el.id) s += '#' + el.id;
+        if (typeof el.className === 'string' && el.className.trim()) {
+          s += '.' + el.className.trim().split(/\s+/).slice(0, 3).join('.');
+        }
+        return s;
+      };
+
+      const collectHits = (root) => {
+        const found = [];
+        (function walk(node) {
+          if (found.length >= 12 || !node) return;
+          if (node.nodeType === 3) {
+            const raw = (node.nodeValue || '').trim();
+            if (raw && raw.length <= 40) {
+              const low = raw.toLowerCase();
+              if (KEYWORDS.some(k => low.includes(k))) {
+                const el = node.parentElement;
+                if (el && !(el.closest && el.closest('.obf-root'))) {
+                  const chain = [];
+                  let p = el;
+                  while (p && p.nodeType === 1 && chain.length < 10) {
+                    chain.push(describe(p));
+                    const rn = p.getRootNode ? p.getRootNode() : null;
+                    p = p.parentElement || (rn && rn.host) || null;
+                  }
+                  found.push('  "' + raw + '"  ' + chain.join(' > '));
+                }
+              }
+            }
+            return;
+          }
+          if (node.nodeType !== 1 && node.nodeType !== 11) return;
+          if (node.nodeType === 1) {
+            const tag = node.tagName;
+            if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'TEMPLATE' ||
+                tag === 'CANVAS' || tag === 'SVG') return;
+            if (node.classList && node.classList.contains('obf-root')) return;
+            if (node.shadowRoot) walk(node.shadowRoot);
+          }
+          let c = node.firstChild;
+          while (c) { walk(c); c = c.nextSibling; }
+        })(root);
+        return found;
+      };
+
+      const scanDoc = (doc, label, depth) => {
+        if (!doc || depth > 3) return;
+        let body = null;
+        try { body = doc.body; } catch (e) { return; }
+        if (!body) return;
+        let nTables = 0, nGrids = 0;
+        try {
+          nTables = doc.querySelectorAll('table').length;
+          nGrids = doc.querySelectorAll('[role="grid"], [role="table"]').length;
+        } catch (e) { /* ignore */ }
+        const found = collectHits(body);
+        const bomNamed = [];
+        try {
+          for (const el of Array.from(
+            doc.querySelectorAll('[class*="bom" i], [id*="bom" i]')).slice(0, 5)) {
+            bomNamed.push('  <' + describe(el) + '> ' +
+              (el.outerHTML || '').replace(/\s+/g, ' ').slice(0, 300));
+          }
+        } catch (e) { /* ignore */ }
+        if (found.length || bomNamed.length || nTables || nGrids) {
+          out.push('[' + label + '] tables=' + nTables +
+            ', role=grid/table=' + nGrids +
+            ', 疑似表头文本=' + found.length +
+            ', bom命名元素=' + bomNamed.length);
+          out.push(...found, ...bomNamed);
+        }
+        let frames = [];
+        try { frames = Array.from(doc.querySelectorAll('iframe, frame')); } catch (e) { /* ignore */ }
+        frames.forEach((f, i) => {
+          let cd = null;
+          try { cd = f.contentDocument; } catch (e) { /* 跨域 */ }
+          if (cd) {
+            scanDoc(cd, label + '>iframe[' + i + ']', depth + 1);
+          } else {
+            out.push('[' + label + '] iframe[' + i + '] 无法访问（跨域?）: ' +
+              ((f.src || '').slice(0, 100) || '(无 src)'));
+          }
+        });
+      };
+
+      scanDoc(document, 'top', 0);
+      if (!out.length) {
+        out.push('未发现任何 BOM 痕迹。请确认 BOM 表已打开；' +
+          '若 BOM 在跨域 iframe 中，请在 DevTools 控制台左上角框架选择器切换到对应框架后重跑 __obf.inspect()');
+      }
+      const text = '[BOM Filter inspect]\n' + out.join('\n');
+      console.info(text);
+      return text;
     },
     scan() {
       const hosts = findBomHosts();
