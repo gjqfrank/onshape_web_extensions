@@ -105,6 +105,40 @@
 
   // 单元格文本缓存（Onshape 重渲染会创建新节点，缓存自动失效）
   const textCache = new WeakMap();
+  // 把 "rgb(r, g, b)" / "rgba(r, g, b, a)" 规范化为 "#rrggbb"；无法解析返回 null
+  function rgbToHex(rgb) {
+    const m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/.exec(rgb || '');
+    if (!m) return null;
+    if (m[4] !== undefined && parseFloat(m[4]) === 0) return null; // 完全透明
+    return '#' + [1, 2, 3].map(i => (+m[i]).toString(16).padStart(2, '0')).join('');
+  }
+
+  // 判断是否为提取出的色块颜色值（十六进制）
+  function isColorValue(v) {
+    return /^#[0-9a-f]{6}$/i.test(v || '');
+  }
+
+  // 生成色块预览元素
+  function makeSwatch(v) {
+    const sw = make('span', 'obf-swatch');
+    sw.style.background = v;
+    return sw;
+  }
+
+  // Onshape 的 Appearance（外观）列只有色块（无文字描述）。
+  // 找到单元格内第一个带不透明背景色的元素，把颜色提取为十六进制文本，
+  // 使外观列可以像普通文字列一样被筛选和列举。无色块返回 null。
+  function extractSwatchColor(cell) {
+    try {
+      const nodes = cell.querySelectorAll('*');
+      for (const node of nodes) {
+        const hex = rgbToHex(getComputedStyle(node).backgroundColor);
+        if (hex) return hex;
+      }
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
   function cachedText(el) {
     let t = textCache.get(el);
     if (t === undefined) {
@@ -115,6 +149,13 @@
         for (const inp of inputs) {
           const v = (inp.value || '').trim();
           if (v) t += (t ? ' ' : '') + v;
+        }
+      } catch (e) { /* ignore */ }
+      // 纯色块单元格（如 Appearance）：把色块颜色转为可筛选的十六进制文本
+      try {
+        if (!t || t === 'default') {
+          const hex = extractSwatchColor(el);
+          if (hex) t += (t ? ' ' : '') + hex;
         }
       } catch (e) { /* ignore */ }
       textCache.set(el, t);
@@ -579,6 +620,11 @@
     renderConditions() {
       this.bodyEl.textContent = '';
       this.condEls = [];
+      this.openMenuIdx = null; // 重新渲染后旧下拉面板全部失效
+      if (this.menuOutside) {
+        document.removeEventListener('click', this.menuOutside, true);
+        this.menuOutside = null;
+      }
 
       this.conditions.forEach((cond, i) => {
         const row = make('div', 'obf-cond');
@@ -589,6 +635,7 @@
         this.fillColumnOptions(colSel, cond.column);
         colSel.addEventListener('change', () => {
           cond.column = parseInt(colSel.value, 10);
+          this.closeValueMenu(); // 列变了，旧面板数据作废
           this.applyFilter();
         });
 
@@ -617,6 +664,18 @@
         });
         input.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') this.addCondition();
+          else if (e.key === 'Escape') this.closeValueMenu();
+        });
+
+        // 已有值选择下拉（Appearance 等纯色块列直接显示色块本身）
+        const caret = make('button', 'obf-btn-icon obf-caret', '▾');
+        caret.type = 'button';
+        caret.title = '从该列已有值中选择（颜色显示为色块）';
+        const panel = make('div', 'obf-valmenu');
+        panel.addEventListener('click', (e) => e.stopPropagation());
+        caret.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.toggleValueMenu(i);
         });
 
         // 删除条件
@@ -630,15 +689,96 @@
           this.applyFilter();
         });
 
-        row.append(colSel, opSel, input, del);
+        row.append(colSel, opSel, input, caret, del, panel);
         this.bodyEl.append(row);
-        this.condEls.push({ colSel });
+        this.condEls.push({ colSel, input, panel });
       });
 
       const add = make('button', 'obf-add', UI_TEXT.addCondition);
       add.type = 'button';
       add.addEventListener('click', () => this.addCondition());
       this.bodyEl.append(add);
+    }
+
+    /* ---------- 已有值选择下拉（含色块预览） ---------- */
+
+    toggleValueMenu(i) {
+      if (this.openMenuIdx === i) { this.closeValueMenu(); return; }
+      this.closeValueMenu();
+      const entry = this.condEls[i];
+      if (!entry || !entry.panel) return;
+      this.fillValueMenu(i);
+      entry.panel.classList.add('obf-open');
+      this.openMenuIdx = i;
+      // 点击面板外任意位置关闭
+      this.menuOutside = (e) => {
+        const cur = this.condEls[this.openMenuIdx];
+        if (!cur || !cur.panel || !cur.panel.contains(e.target)) this.closeValueMenu();
+      };
+      document.addEventListener('click', this.menuOutside, true);
+    }
+
+    closeValueMenu() {
+      if (this.openMenuIdx == null) return;
+      const entry = this.condEls[this.openMenuIdx];
+      if (entry && entry.panel) entry.panel.classList.remove('obf-open');
+      if (this.menuOutside) {
+        document.removeEventListener('click', this.menuOutside, true);
+        this.menuOutside = null;
+      }
+      this.openMenuIdx = null;
+    }
+
+    // 从快照缓存收集选中列的全部已有值（去重 + 行数统计），色块值渲染为色块本身
+    fillValueMenu(i) {
+      const entry = this.condEls[i];
+      if (!entry || !entry.panel) return;
+      const panel = entry.panel;
+      panel.textContent = '';
+      const cond = this.conditions[i];
+      const column = cond ? cond.column : -1;
+
+      const counts = new Map(); // 值 → 出现行数
+      const addValue = (v) => {
+        v = (v || '').trim();
+        if (!v) return;
+        counts.set(v, (counts.get(v) || 0) + 1);
+      };
+      for (const texts of this.identityCache.values()) {
+        if (column < 0) { for (const v of texts) addValue(v); } // 任意列：所有列的值
+        else addValue(texts[column]);
+      }
+      const values = Array.from(counts.keys())
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+      if (!values.length) {
+        panel.appendChild(make('div', 'obf-valempty',
+          '暂无已有值（先点「扫描全表」或滚动表格加载行）'));
+        return;
+      }
+      for (const v of values.slice(0, 500)) {
+        const item = make('div', 'obf-valitem');
+        if (isColorValue(v)) {
+          const sw = makeSwatch(v);
+          sw.title = v;
+          item.appendChild(sw);
+        } else {
+          item.appendChild(make('span', 'obf-vallabel', v));
+        }
+        item.appendChild(make('span', 'obf-valcount', String(counts.get(v))));
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const cur = this.condEls[i];
+          if (cur) {
+            cur.input.value = v;
+            cur.input.focus();
+          }
+          if (this.conditions[i]) this.conditions[i].value = v;
+          this.closeValueMenu();
+          this.applyFilter();
+        });
+        panel.appendChild(item);
+      }
     }
 
     addCondition() {
@@ -841,7 +981,17 @@
         item.appendChild(make('span', 'obf-res-cell obf-res-idx', String(idx + 1)));
         const n = headers.length || Math.max(entry.texts.length, 1);
         for (let i = 0; i < n; i++) {
-          item.appendChild(make('span', 'obf-res-cell', entry.texts[i] || ''));
+          const cell = make('span', 'obf-res-cell');
+          const v = entry.texts[i] || '';
+          if (isColorValue(v)) {
+            // 色块值（Appearance 列）：直接显示色块 + 十六进制小字
+            const sw = makeSwatch(v);
+            cell.appendChild(sw);
+            cell.appendChild(make('span', 'obf-res-hex', v));
+          } else {
+            cell.textContent = v;
+          }
+          item.appendChild(cell);
         }
         item.title = entry.texts.filter(t => t).join(' | ');
         item.addEventListener('click', () => this.jumpToRow(entry));
