@@ -680,6 +680,23 @@
     return { matches, strong };
   }
 
+  // 判断两个适配器是否指向同一张物理表格（共享表头单元格）。
+  // Onshape 中 os-table 包装元素与内层 .os-table 网格元素的 contains()
+  // 关系可能不可靠，需用此兜底去重，避免挂出两个筛选栏。
+  function samePhysicalTable(a, b) {
+    try {
+      if (typeof a.headerCells !== 'function' ||
+          typeof b.headerCells !== 'function') return false;
+      const ha = a.headerCells();
+      const hb = b.headerCells();
+      if (!ha.length || !hb.length) return false;
+      const set = new Set(hb);
+      return ha.some(c => set.has(c));
+    } catch (e) {
+      return false;
+    }
+  }
+
   // 扫描页面，返回可识别的 BOM 宿主（table 或 div 网格）
   function findBomHosts() {
     const found = [];
@@ -706,8 +723,9 @@
     for (const el of Array.from(document.querySelectorAll('os-table, .os-table'))) {
       if (el.closest('.obf-root')) continue;
       if (el.hasAttribute('data-obf')) continue;
-      if (found.some(f => f.host.contains(el) || el.contains(f.host))) continue;
       const adapter = new OsTableAdapter(el);
+      if (found.some(f => f.host.contains(el) || el.contains(f.host) ||
+                          samePhysicalTable(f.adapter, adapter))) continue;
       const headers = adapter.getHeaders();
       if (headers.length < CONFIG.minColumns) continue;
       const { matches, strong } = countKeywordMatches(headers);
