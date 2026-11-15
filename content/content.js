@@ -156,6 +156,22 @@
     return null;
   }
 
+  // 找行容器的纵向滚动容器（用于全表扫描 / 结果定位）。
+  // 不看 overflow 样式：Onshape 自定义滚动容器的 overflow 可能任意，
+  // 但 scrollTop 始终可以编程设置；取离表格最近、可滚距离足够大的祖先。
+  function findBestScroller(el) {
+    let node = el.parentElement;
+    while (node && node !== document.body) {
+      try {
+        if (node.clientHeight > 0 && node.scrollHeight - node.clientHeight > 24) {
+          return node;
+        }
+      } catch (e) { /* ignore */ }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
   /* ============================ 表格适配器 ============================ */
 
   // 适配原生 <table> 的 BOM 表
@@ -454,6 +470,9 @@
       // 行快照缓存：行标识 → 各列文本。虚拟滚动会销毁/重建行，
       // 已滚动过的行文本缓存在这里，用于维持全表计数与条件变更后的统计。
       this.identityCache = new Map();
+      this.matchedList = [];
+      this.resultsEl = null;
+      this.resultsOpen = false;
       this.condEls = [];
       this.buildUI();
       this.refreshColumnOptions();
@@ -473,14 +492,17 @@
       const head = make('div', 'obf-head');
       this.titleEl = make('span', 'obf-title', UI_TEXT.title);
       this.countEl = make('span', 'obf-count', '');
+      // 点击计数查看全部匹配行（数据来自快照缓存，不受虚拟滚动限制）
+      this.countEl.title = '点击查看匹配的行列表';
+      this.countEl.addEventListener('click', () => this.toggleResults());
       const spacer = make('span', 'obf-spacer');
 
       // 扫描全表（Onshape 使用虚拟滚动，DOM 中只有可视区域的行；
-      // 此按钮自动滚动遍历整个表格，让筛选应用到所有行）
+      // 点击后匀速滚动一遍全表，把所有行数据收集并记住）
       this.btnScan = make('button', '', UI_TEXT.scanAll);
       this.btnScan.type = 'button';
       this.btnScan.title =
-        'Onshape 仅渲染可视区域的行（虚拟滚动）。点击后自动滚动遍历全表，收集所有行数据，得到全表计数；滚动时筛选会自动应用到新出现的行';
+        '匀速滚动一遍全表，收集并记住所有行的数据（此后计数与匹配列表覆盖全表）；点击计数徽章可查看全部匹配行';
       this.btnScan.addEventListener('click', () => this.scanWholeTable());
 
       // 模式切换（筛选 / 高亮）
@@ -679,7 +701,10 @@
     }
 
     applyFilter() {
-      if (this.disposed) return;
+      // 扫描进行中禁用重新筛选：虚拟滚动重建行会触发 observer →
+      // 重新隐藏行 → 滚动高度变化 → 与 Onshape 互相拉扯（表格跳动的根因）。
+      // 扫描结束时会统一 applyFilter 一次。
+      if (this.disposed || this.scanning) return;
       const rows = this.adapter.getRows();
       const active = this.conditions.filter(c => c.value.trim() !== '');
       const matchers = active.map(c => ({
@@ -690,6 +715,7 @@
 
       // 实时评估当前渲染的行，同时收集快照（行标识 → 各列文本）
       const seen = new Map(); // 行标识 → 是否匹配
+      const matchedList = [];
       for (const row of rows) {
         const ok = !hasFilter || this.rowMatches(row, matchers);
         if (this.mode === 'filter') {
@@ -705,14 +731,19 @@
           seen.set(id, !hasFilter || ok);
           // 同步快照缓存（虚拟滚动中滚动过的行不断补充）
           if (!this.identityCache.has(id)) this.identityCache.set(id, texts);
+          if (ok) matchedList.push({ id, texts });
         }
       }
       // 合并快照缓存中已滚动离开 DOM 的行，维持全表计数
       for (const [id, texts] of this.identityCache) {
         if (!seen.has(id)) {
-          seen.set(id, !hasFilter || this.snapshotMatches(texts, matchers));
+          const m = !hasFilter || this.snapshotMatches(texts, matchers);
+          seen.set(id, m);
+          if (m) matchedList.push({ id, texts });
         }
       }
+      this.matchedList = matchedList;
+      if (this.resultsOpen) this.renderResults();
       let matched = 0;
       for (const m of seen.values()) if (m) matched++;
       this.updateCount(matched, seen.size, hasFilter);
@@ -743,6 +774,67 @@
       return true;
     }
 
+    /* ---------- 匹配结果列表（不受虚拟滚动限制） ---------- */
+
+    toggleResults() {
+      if (!this.resultsEl) {
+        this.resultsEl = make('div', 'obf-results');
+        this.resultsEl.style.display = 'none';
+        this.toolbar.appendChild(this.resultsEl);
+      }
+      this.resultsOpen = !this.resultsOpen;
+      this.resultsEl.style.display = this.resultsOpen ? 'block' : 'none';
+      if (this.resultsOpen) this.renderResults();
+    }
+
+    renderResults() {
+      if (!this.resultsEl || this.disposed) return;
+      while (this.resultsEl.firstChild) {
+        this.resultsEl.removeChild(this.resultsEl.firstChild);
+      }
+      const list = this.matchedList || [];
+      if (!list.length) {
+        this.resultsEl.appendChild(make('div', 'obf-result-empty', '无匹配行'));
+        return;
+      }
+      const cap = 500; // 防止超大 BOM 一次性渲染过多 DOM
+      for (const entry of list.slice(0, cap)) {
+        const item = make('div', 'obf-result-item');
+        const texts = entry.texts.filter(t => t);
+        item.textContent = texts.slice(0, 3).join(' · ');
+        item.title = texts.join(' | ');
+        item.addEventListener('click', () => this.jumpToRow(entry));
+        this.resultsEl.appendChild(item);
+      }
+      if (list.length > cap) {
+        this.resultsEl.appendChild(make('div', 'obf-result-empty',
+          '… 其余 ' + (list.length - cap) + ' 行未显示'));
+      }
+    }
+
+    // 尽力而为：按 Item 编号估算行位置并滚动过去（行高从当前渲染行测量）
+    jumpToRow(entry) {
+      try {
+        const num = (entry.texts[0] || '').match(/\d+/);
+        if (!num) return;
+        const n = parseInt(num[0], 10);
+        const scroller = findBestScroller(this.host) || findScrollParent(this.host);
+        if (!scroller) return;
+        let rowH = 0;
+        const rows = this.adapter.getRows();
+        if (rows.length && rows[0].els && rows[0].els[0]) {
+          const el = rows[0].els[0];
+          rowH = el.getBoundingClientRect().height;
+          // 行容器本身测不到时，退而测量其内部第一个单元格
+          if ((!rowH || rowH < 4) && el.firstElementChild) {
+            rowH = el.firstElementChild.getBoundingClientRect().height;
+          }
+        }
+        if (!rowH || rowH < 4) rowH = 26; // Onshape BOM 行高经验值
+        scroller.scrollTop = Math.max(0, (n - 1) * rowH);
+      } catch (e) { /* 尽力而为，出错忽略 */ }
+    }
+
     updateCount(matched, total, hasFilter) {
       this.countEl.textContent = hasFilter ? matched + ' / ' + total : String(total);
       this.countEl.title = hasFilter
@@ -760,10 +852,11 @@
 
     /* ---------- 全表扫描（应对虚拟滚动） ---------- */
 
-    // Onshape 只渲染可视区域内的行（虚拟滚动）。此方法自动逐步滚动整个
-    // 表格，把每一行的内容收集进快照缓存。扫描期间刻意【不做隐藏】——
-    // 隐藏行会改变滚动高度，与 Onshape 的虚拟滚动计算互相拉扯，导致表格
-    // 反复跳动。扫描结束后再一次性应用筛选，并依靠快照缓存给出全表计数。
+    // Onshape 只渲染可视区域内的行（虚拟滚动）。此方法自动匀速滚动整个
+    // 表格，把每一行的内容收集进快照缓存并永久记住（计数、结果列表、
+    // 筛选都基于缓存给出全表结果）。扫描期间 applyFilter 被禁用（observer
+    // 触发的重新隐藏会与虚拟滚动互相拉扯——这是此前表格反复跳动的根因），
+    // 扫描结束后只应用一次筛选。
     scanWholeTable() {
       if (this.scanning) { // 再次点击 = 停止
         this.scanning = false;
@@ -773,17 +866,18 @@
         this.applyFilter(); // 恢复筛选状态
         return;
       }
-      const scroller = findScrollParent(this.host);
+      const scroller = findBestScroller(this.host) || findScrollParent(this.host);
       if (!scroller) {
-        console.info('[BOM Filter] 未找到滚动容器，无法扫描全表');
+        console.info('[BOM Filter] 未找到滚动容器；当前可见行已收集');
         return;
       }
-      this.scanning = true;
+      this.scanning = true; // 从此到扫描结束，applyFilter 全部禁用
       this.scanStable = 0;
       this.btnScan.textContent = UI_TEXT.scanning;
       const originTop = scroller.scrollTop;
+      let lastHeight = -1;
 
-      // 扫描期间先让所有已渲染行恢复显示，避免高度振荡
+      // 扫描开始前让所有已渲染行恢复显示
       for (const row of this.adapter.getRows()) {
         this.adapter.setRowVisible(row, true);
         this.adapter.setRowMatched(row, false);
@@ -792,10 +886,10 @@
       const finish = () => {
         this.scanning = false;
         this.btnScan.textContent = UI_TEXT.scanAll;
-        scroller.scrollTop = originTop; // 回到起始位置
+        try { scroller.scrollTop = originTop; } catch (e) { /* ignore */ }
         this.applyFilter(); // 只在结束时应用一次
         console.info('[BOM Filter] 全表扫描完成，共收集 ' +
-          this.identityCache.size + ' 行');
+          this.identityCache.size + ' 行（已记住）');
       };
 
       const step = () => {
@@ -810,17 +904,24 @@
           }
         }
         const maxScroll = scroller.scrollHeight - scroller.clientHeight;
-        if (maxScroll <= 0 || scroller.scrollTop >= maxScroll - 2) {
-          // 已到底：等待尾部可能的延迟渲染，连续稳定数次后结束
+        const atBottom = maxScroll <= 0 || scroller.scrollTop >= maxScroll - 2;
+        const heightStable = scroller.scrollHeight === lastHeight;
+        lastHeight = scroller.scrollHeight;
+        if (atBottom && heightStable) {
+          // 已到底且高度不再变化：再等数个周期，兼容尾部懒加载/批量渲染
           this.scanStable++;
-          if (this.scanStable >= 4) return finish();
+          if (this.scanStable >= 8) return finish();
         } else {
           this.scanStable = 0;
-          scroller.scrollTop = Math.min(
-            scroller.scrollTop + Math.max(200, scroller.clientHeight - 120),
-            maxScroll);
+          if (!atBottom) {
+            // 小步前进（≤40% 可视高度），确保虚拟滚动来得及渲染中间行
+            scroller.scrollTop = Math.min(
+              scroller.scrollTop +
+                Math.min(240, Math.max(60, Math.round(scroller.clientHeight * 0.4))),
+              maxScroll);
+          }
         }
-        this.scanTimer = setTimeout(step, 140);
+        this.scanTimer = setTimeout(step, 120);
       };
       step();
     }

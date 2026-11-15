@@ -50,6 +50,41 @@
   padding: 1px 8px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.obf-count:hover {
+  background: #cfe3f7;
+}
+
+/* 匹配结果列表（数据来自全表快照，不受虚拟滚动限制） */
+.obf-results {
+  margin-top: 6px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid #c9d1d9;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.obf-result-item {
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 12px;
+}
+
+.obf-result-item:hover {
+  background: #eef4fb;
+}
+
+.obf-result-empty {
+  padding: 4px 8px;
+  color: #888;
+  font-size: 12px;
 }
 
 .obf-count.obf-zero {
