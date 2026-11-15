@@ -1,4 +1,8 @@
-/* Onshape BOM Filter — 注入样式（所有类名以 obf- 前缀隔离） */
+/*
+ * Onshape BOM Filter — 注入样式（所有类名以 obf- 前缀隔离）
+ * Copyright (c) 2026 FRC 6907 The GOAT. All rights reserved.
+ * 本扩展及其源码仅供 FRC 6907 The GOAT 授权的用户使用，未经许可不得公开分发。
+ */
 
 .obf-root {
   box-sizing: border-box;
@@ -145,6 +149,15 @@
 .obf-count.obf-zero {
   background: #ffe9e9;
   color: #c62828;
+}
+
+/* 品牌署名：FRC 6907 The GOAT */
+.obf-brand {
+  font-size: 11px;
+  color: #6e7781;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
 }
 
 .obf-spacer {

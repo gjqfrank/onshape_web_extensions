@@ -6,6 +6,11 @@
  * 数量、材料、颜色等一切 BOM 包含的属性）筛选或高亮零件行。
  *
  * 纯 DOM 实现，不调用任何 Onshape API，不消耗 API 配额。
+ *
+ * Copyright (c) 2026 FRC 6907 The GOAT. All rights reserved.
+ * 本扩展及其源码仅供 FRC 6907 The GOAT 授权的用户使用，未经许可不得公开分发。
+ * "Onshape" 是 Onshape, Inc.（PTC）的商标，本扩展为非官方独立作品，
+ * 与 Onshape, Inc. 无隶属或代言关系；图标为原创设计，不含其商标元素。
  */
 (() => {
   'use strict';
@@ -619,7 +624,12 @@
         this.btnToggle.textContent = this.collapsed ? '+' : '–';
       });
 
-      head.append(this.titleEl, this.countEl, this.btnScan, spacer, seg, this.btnCase, this.btnClear, this.btnToggle);
+      // 品牌署名：FRC 6907 The GOAT
+      const brand = make('span', 'obf-brand', 'FRC 6907 The GOAT');
+      brand.title = 'Onshape BOM Filter · 由 FRC 6907 The GOAT 制作\n未经授权请勿公开分发';
+
+      head.append(this.titleEl, this.countEl, this.btnScan, spacer, seg,
+        this.btnCase, this.btnClear, brand, this.btnToggle);
 
       this.bodyEl = make('div', 'obf-body');
       toolbar.append(head, this.bodyEl);
