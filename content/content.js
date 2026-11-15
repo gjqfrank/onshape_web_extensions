@@ -62,6 +62,20 @@
     valuePlaceholder: '输入筛选值…'
   };
 
+  /* ============================ 调试日志 ============================ */
+
+  // 在控制台始终输出一条加载日志，便于确认脚本已注入。
+  // 在 DevTools 控制台执行 localStorage.setItem('obfDebug','1') 并刷新，
+  // 可打开详细检测日志；执行 window.__obf.help() 查看手动诊断命令。
+  let DEBUG = false;
+  try {
+    DEBUG = localStorage.getItem('obfDebug') === '1';
+  } catch (e) { /* 某些 frame 中 localStorage 不可用 */ }
+
+  function log(...args) {
+    if (DEBUG) console.log('[BOM Filter]', ...args);
+  }
+
   /* ============================ 工具函数 ============================ */
 
   function debounce(fn, ms) {
@@ -195,13 +209,23 @@
     }
 
     findRows() {
-      const all = Array.prototype.filter.call(
+      let all = Array.prototype.filter.call(
         this.root.querySelectorAll('[role="row"], div[class*="row"], li[class*="row"]'),
         r => !r.closest('.obf-root')
       );
-      const header =
+      // 去掉嵌套在其他行内的行，避免重复计数
+      all = all.filter(r => !all.some(o => o !== r && o.contains(r)));
+      // 表头识别：类名特征 → 含 columnheader 单元格 → 文本命中 BOM 关键词的首行
+      let header =
         all.find(r => /(^|\s)row[-_]?header|header[-_]?row|(^|\s)head(\s|$)/i.test(classText(r))) ||
+        all.find(r => r.querySelector('[role="columnheader"]')) ||
         null;
+      if (!header && all.length) {
+        const first = all[0];
+        const texts = this.cellsOf(first).map(c => cachedText(c));
+        const { matches, strong } = countKeywordMatches(texts);
+        if (matches >= 2 && strong) header = first;
+      }
       return { header, rows: all.filter(r => r !== header) };
     }
 
@@ -590,26 +614,52 @@
       const isBom = container
         ? matches >= CONFIG.minHeaderMatchesInBomContainer
         : (matches >= CONFIG.minHeaderMatches && strong);
+      log('table 候选', table, 'headers=', headers, 'matches=', matches,
+        'strong=', strong, 'bomContainer=', !!container, '→', isBom);
       if (!isBom) continue;
       found.push({ host: table, adapter, root: container || table.parentElement });
     }
 
-    // 2) 回退：bom 容器内的 div 网格（无 <table> 时）
+    // 2) div 网格：优先类名/ID 含 bom 的容器（宽松阈值），
+    //    其次 role=grid/table 等网格语义元素（严格阈值）
     const containers = [];
-    const containerSel = '[class*="bom"], [id*="bom"], [class*="BOM"], [id*="BOM"], [class*="Bom"], [id*="Bom"]';
-    for (const el of Array.from(document.querySelectorAll(containerSel))) {
-      if (el.nodeType === 1 && !el.closest('.obf-root')) containers.push(el);
+    const seen = new Set();
+    const bomSel = '[class*="bom" i], [id*="bom" i]';
+    const gridSel = '[role="grid"], [role="table"], [role="treegrid"]';
+    for (const el of Array.from(document.querySelectorAll(bomSel))) {
+      if (el.nodeType === 1 && !el.closest('.obf-root') && !seen.has(el)) {
+        seen.add(el);
+        containers.push({ el, named: true });
+      }
     }
-    for (const cont of containers) {
+    for (const el of Array.from(document.querySelectorAll(gridSel))) {
+      if (el.nodeType === 1 && !el.closest('.obf-root') && !seen.has(el)) {
+        seen.add(el);
+        containers.push({ el, named: false });
+      }
+    }
+
+    for (const { el: cont, named } of containers) {
       if (cont.hasAttribute('data-obf')) continue;
       if (cont.querySelector('table')) continue; // 已由上面的逻辑处理
+      // 与已识别宿主重叠（祖先/后代）时跳过，避免重复挂载
+      if (found.some(f => f.host.contains(cont) || cont.contains(f.host))) continue;
       const rows = cont.querySelectorAll('[role="row"], div[class*="row"], li[class*="row"]');
-      if (rows.length < 2) continue;
+      if (rows.length < 2) {
+        log('div 网格候选被跳过（行数不足）', cont);
+        continue;
+      }
       const adapter = new DivGridAdapter(cont);
       const headers = adapter.getHeaders();
-      const { matches } = countKeywordMatches(headers);
-      if (headers.length >= CONFIG.minColumns &&
-          matches >= CONFIG.minHeaderMatchesInBomContainer) {
+      const { matches, strong } = countKeywordMatches(headers);
+      const isBom = named
+        ? (headers.length >= CONFIG.minColumns &&
+           matches >= CONFIG.minHeaderMatchesInBomContainer)
+        : (headers.length >= CONFIG.minColumns &&
+           matches >= CONFIG.minHeaderMatches && strong);
+      log('div 网格候选', cont, 'named=', named, 'headers=', headers,
+        'matches=', matches, 'strong=', strong, '→', isBom);
+      if (isBom) {
         found.push({ host: cont, adapter, root: cont });
       }
     }
@@ -637,8 +687,9 @@
       if (exists) continue;
       try {
         controllers.add(new BomFilterController(f.host, f.adapter, f.root));
+        console.info('[BOM Filter] 已为 BOM 表挂载筛选栏:', f.host);
       } catch (e) {
-        // 单个表格挂载失败不影响其他表格
+        console.warn('[BOM Filter] 筛选栏挂载失败:', e);
       }
     }
   }
@@ -688,7 +739,58 @@
     scheduleApplyDirty();
   });
 
+  // 诊断 / 手动挂载 API（在 DevTools 控制台使用，__obf.help() 查看说明）
+  window.__obf = {
+    help() {
+      console.info(
+        '[BOM Filter] 诊断命令:\n' +
+        '  __obf.scan()            立即重新扫描页面并输出检测结果\n' +
+        '  __obf.status()          查看当前已挂载的筛选栏\n' +
+        '  __obf.attach(selector)  手动为指定表格/网格元素挂载筛选栏\n' +
+        '  __obf.setDebug(true)    开启详细检测日志'
+      );
+    },
+    scan() {
+      const hosts = findBomHosts();
+      scan();
+      console.info('[BOM Filter] 扫描完成：识别到', hosts.length,
+        '个 BOM 表，当前已挂载', controllers.size, '个筛选栏');
+      return hosts.map(h => h.host);
+    },
+    status() {
+      return Array.from(controllers).map(c => c.host);
+    },
+    attach(selector) {
+      const el = typeof selector === 'string'
+        ? document.querySelector(selector) : selector;
+      if (!el) {
+        console.warn('[BOM Filter] 未找到元素:', selector);
+        return false;
+      }
+      const adapter = el.tagName === 'TABLE'
+        ? new HtmlTableAdapter(el) : new DivGridAdapter(el);
+      try {
+        controllers.add(new BomFilterController(
+          el, adapter, findBomContainer(el) || el.parentElement));
+        console.info('[BOM Filter] 已手动挂载筛选栏:', el);
+        return true;
+      } catch (e) {
+        console.warn('[BOM Filter] 挂载失败:', e);
+        return false;
+      }
+    },
+    setDebug(on) {
+      DEBUG = !!on;
+      try {
+        localStorage.setItem('obfDebug', on ? '1' : '0');
+      } catch (e) { /* ignore */ }
+      console.info('[BOM Filter] 详细日志已' + (on ? '开启' : '关闭'));
+    }
+  };
+
   function init() {
+    console.info('[BOM Filter] 内容脚本已加载',
+      window === window.top ? '(顶层页面)' : '(iframe)', location.origin);
     scan();
     observer.observe(document.documentElement, {
       childList: true,
