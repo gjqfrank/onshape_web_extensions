@@ -1,0 +1,192 @@
+/* Onshape BOM Filter — 注入样式（所有类名以 obf- 前缀隔离） */
+
+.obf-root {
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #24292f;
+  z-index: 9999;
+}
+
+.obf-root *,
+.obf-root *::before,
+.obf-root *::after {
+  box-sizing: inherit;
+  font-family: inherit;
+}
+
+.obf-toolbar {
+  position: sticky;
+  top: 0;
+  display: block;
+  width: auto;
+  background: #f8f9fb;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  margin: 4px 6px;
+  padding: 6px 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.obf-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.obf-title {
+  font-weight: 600;
+  color: #0969da;
+  white-space: nowrap;
+}
+
+.obf-count {
+  background: #e7f0fb;
+  color: #0969da;
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.obf-count.obf-zero {
+  background: #ffe9e9;
+  color: #c62828;
+}
+
+.obf-spacer {
+  flex: 1;
+}
+
+.obf-seg {
+  display: inline-flex;
+  border: 1px solid #c9d1d9;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.obf-seg button {
+  border: none;
+  background: #fff;
+  color: #444;
+  padding: 3px 10px;
+  margin: 0;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 0;
+}
+
+.obf-seg button + button {
+  border-left: 1px solid #c9d1d9;
+}
+
+.obf-seg button.obf-active {
+  background: #0969da;
+  color: #fff;
+}
+
+.obf-toolbar button {
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  border: 1px solid #c9d1d9;
+  background: #fff;
+  color: #444;
+  border-radius: 5px;
+  padding: 3px 8px;
+  margin: 0;
+  height: auto;
+  width: auto;
+}
+
+.obf-toolbar button:hover {
+  background: #eef2f6;
+}
+
+.obf-seg button:hover {
+  background: #eef2f6;
+}
+
+.obf-seg button.obf-active:hover {
+  background: #0969da;
+}
+
+.obf-btn-icon {
+  padding: 3px 7px;
+}
+
+.obf-case.obf-active {
+  background: #0969da;
+  color: #fff;
+  border-color: #0969da;
+}
+
+.obf-body {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.obf-cond {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.obf-cond select,
+.obf-cond input {
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid #c9d1d9;
+  border-radius: 5px;
+  background: #fff;
+  color: #24292f;
+  margin: 0;
+  height: 24px;
+}
+
+.obf-cond input:focus,
+.obf-cond select:focus {
+  outline: 2px solid #0969da55;
+  outline-offset: -1px;
+}
+
+.obf-col {
+  max-width: 150px;
+}
+
+.obf-op {
+  width: 64px;
+}
+
+.obf-val {
+  flex: 1;
+  min-width: 80px;
+}
+
+.obf-del {
+  color: #c62828;
+}
+
+.obf-add {
+  align-self: flex-start;
+}
+
+.obf-toolbar.obf-collapsed .obf-body {
+  display: none;
+}
+
+/* 高亮模式下的匹配行 */
+.obf-match {
+  background: rgba(255, 214, 64, 0.35) !important;
+}
+
+.obf-match > td,
+.obf-match > th {
+  background: rgba(255, 214, 64, 0.35) !important;
+}
