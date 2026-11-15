@@ -670,8 +670,16 @@
       const sig = headers.join('\u0000');
       if (sig === this.headerSig) return;
       const oldHeaders = this.headers || [];
+      const hadHeaders = oldHeaders.length > 0;
       this.headerSig = sig;
       this.headers = headers;
+      // 列结构变化（增/删/改列）时，快照缓存的列文本与行标识已过时：
+      // 直接失效整个缓存，否则旧行与新行会被重复计数、总行数虚增。
+      // 已扫过的行需要重新「扫描全表」收集。
+      if (hadHeaders && this.identityCache.size) {
+        this.identityCache.clear();
+        this.scannedOnce = false;
+      }
       // 按列名重新映射已有条件的列索引（应对 Onshape 增删列）
       for (const cond of this.conditions) {
         if (cond.column >= 0) {
