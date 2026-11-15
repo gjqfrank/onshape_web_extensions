@@ -59,6 +59,8 @@
     modeHighlight: '高亮',
     caseSensitive: 'Aa',
     clear: '清空',
+    scanAll: '扫描全表',
+    scanning: '停止扫描',
     valuePlaceholder: '输入筛选值…'
   };
 
@@ -418,6 +420,14 @@
       this.countEl = make('span', 'obf-count', '');
       const spacer = make('span', 'obf-spacer');
 
+      // 扫描全表（Onshape 使用虚拟滚动，DOM 中只有可视区域的行；
+      // 此按钮自动滚动遍历整个表格，让筛选应用到所有行）
+      this.btnScan = make('button', '', UI_TEXT.scanAll);
+      this.btnScan.type = 'button';
+      this.btnScan.title =
+        'Onshape 仅渲染可视区域的行。点击后自动滚动遍历全表，把筛选应用到所有行';
+      this.btnScan.addEventListener('click', () => this.scanWholeTable());
+
       // 模式切换（筛选 / 高亮）
       const seg = make('span', 'obf-seg');
       this.btnFilter = make('button', 'obf-active', UI_TEXT.modeFilter);
@@ -460,7 +470,7 @@
         this.btnToggle.textContent = this.collapsed ? '+' : '–';
       });
 
-      head.append(this.titleEl, this.countEl, spacer, seg, this.btnCase, this.btnClear, this.btnToggle);
+      head.append(this.titleEl, this.countEl, this.btnScan, spacer, seg, this.btnCase, this.btnClear, this.btnToggle);
 
       this.bodyEl = make('div', 'obf-body');
       toolbar.append(head, this.bodyEl);
@@ -652,8 +662,60 @@
       this.applyFilter();
     }
 
+    /* ---------- 全表扫描（应对虚拟滚动） ---------- */
+
+    // Onshape 只渲染可视区域内的行（虚拟滚动）。此方法自动逐步滚动
+    // 滚动容器，让虚拟列表把所有行渲染出来，并在每一步重新应用筛选，
+    // 使不匹配的行在整个表格范围内都被隐藏/高亮。
+    scanWholeTable() {
+      if (this.scanning) { // 再次点击 = 停止
+        this.scanning = false;
+        if (this.scanTimer) clearTimeout(this.scanTimer);
+        this.scanTimer = null;
+        this.btnScan.textContent = UI_TEXT.scanAll;
+        return;
+      }
+      const scroller = findScrollParent(this.host);
+      if (!scroller) {
+        console.info('[BOM Filter] 未找到滚动容器，无法扫描全表');
+        return;
+      }
+      this.scanning = true;
+      this.scanStable = 0;
+      this.btnScan.textContent = UI_TEXT.scanning;
+      const originTop = scroller.scrollTop;
+
+      const step = () => {
+        this.scanTimer = null;
+        if (!this.scanning || this.disposed) return;
+        this.applyFilter(); // 应用到当前渲染出的行
+        const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+        if (scroller.scrollTop >= maxScroll - 2) {
+          // 已到底：等待尾部可能的延迟渲染，连续稳定数次后结束
+          this.scanStable++;
+          if (this.scanStable >= 4) {
+            this.scanning = false;
+            this.btnScan.textContent = UI_TEXT.scanAll;
+            scroller.scrollTop = originTop; // 回到起始位置
+            this.applyFilter();
+            console.info('[BOM Filter] 全表扫描完成');
+            return;
+          }
+        } else {
+          this.scanStable = 0;
+          scroller.scrollTop = Math.min(
+            scroller.scrollTop + Math.max(200, scroller.clientHeight - 120),
+            maxScroll);
+        }
+        this.scanTimer = setTimeout(step, 130);
+      };
+      step();
+    }
+
     dispose() {
       this.disposed = true;
+      this.scanning = false;
+      if (this.scanTimer) clearTimeout(this.scanTimer);
       if (this.toolbar && this.toolbar.parentElement) {
         this.toolbar.parentElement.removeChild(this.toolbar);
       }
@@ -900,6 +962,7 @@
         '[BOM Filter] 诊断命令:\n' +
         '  __obf.scan()            立即重新扫描页面并输出检测结果\n' +
         '  __obf.status()          查看当前已挂载的筛选栏\n' +
+        '  __obf.rows(n)           打印当前识别到的表头与前 n 行单元格文本（诊断列错位）\n' +
         '  __obf.attach(selector)  手动为指定表格/网格元素挂载筛选栏\n' +
         '  __obf.inspect()         遍历所有同源 iframe，诊断 BOM 表的真实 DOM 结构\n' +
         '  __obf.setDebug(true)    开启详细检测日志'
@@ -1026,8 +1089,11 @@
         console.warn('[BOM Filter] 未找到元素:', selector);
         return false;
       }
+      const isOsTable = el.matches &&
+        (el.matches('os-table, .os-table') || !!el.querySelector('.os-thead'));
       const adapter = el.tagName === 'TABLE'
-        ? new HtmlTableAdapter(el) : new DivGridAdapter(el);
+        ? new HtmlTableAdapter(el)
+        : isOsTable ? new OsTableAdapter(el) : new DivGridAdapter(el);
       try {
         controllers.add(new BomFilterController(
           el, adapter, findBomContainer(el) || el.parentElement));
@@ -1037,6 +1103,29 @@
         console.warn('[BOM Filter] 挂载失败:', e);
         return false;
       }
+    },
+    // 诊断列错位：打印表头与前 n 行的单元格文本
+    rows(n = 5) {
+      const c = Array.from(controllers)[0];
+      if (!c) {
+        console.warn('[BOM Filter] 当前没有已挂载的筛选栏');
+        return null;
+      }
+      const headers = c.adapter.getHeaders();
+      const rows = c.adapter.getRows().slice(0, Math.max(1, n | 0));
+      const data = rows.map(r => {
+        const cnt = c.adapter.getCellCount(r);
+        return Array.from({ length: cnt }, (_, i) => c.adapter.getCellText(r, i));
+      });
+      const out = {
+        host: c.host.tagName + '.' + (c.host.className || ''),
+        headerCount: headers.length,
+        headers,
+        rowCellCounts: rows.map(r => c.adapter.getCellCount(r)),
+        rows: data
+      };
+      console.info('[BOM Filter rows]', JSON.stringify(out, null, 1));
+      return out;
     },
     setDebug(on) {
       DEBUG = !!on;
