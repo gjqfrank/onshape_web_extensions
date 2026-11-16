@@ -697,19 +697,40 @@
           this.applyFilter();
         });
 
-        // 筛选值
+        // 筛选值（外层包装用于叠加色块显示）
+        const wrap = make('span', 'obf-valwrap');
         const input = make('input', 'obf-val');
         input.type = 'text';
         input.placeholder = UI_TEXT.valuePlaceholder;
         input.value = cond.value;
+
+        // 当前值为颜色时，输入框显示为色块而非十六进制文本；
+        // 点击色块进入编辑（显示原始文本），失焦后恢复色块。
+        const chip = make('span', 'obf-valchip');
+        const syncChip = () => {
+          const show = isColorValue(input.value) && document.activeElement !== input;
+          chip.style.display = show ? 'block' : 'none';
+          if (show) {
+            chip.style.background = input.value;
+            chip.title = input.value;
+          }
+        };
+        chip.addEventListener('mousedown', (e) => {
+          e.preventDefault(); // 避免先触发 blur 导致色块消失
+          input.focus();
+        });
+        input.addEventListener('focus', syncChip);
+        input.addEventListener('blur', syncChip);
         input.addEventListener('input', () => {
           cond.value = input.value;
+          syncChip();
           this.applyFilter();
         });
         input.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') this.addCondition();
           else if (e.key === 'Escape') this.closeValueMenu();
         });
+        wrap.append(input, chip);
 
         // 已有值选择下拉（Appearance 等纯色块列直接显示色块本身）
         const caret = make('button', 'obf-btn-icon obf-caret', '▾');
@@ -733,10 +754,16 @@
           this.applyFilter();
         });
 
-        row.append(colSel, opSel, input, caret, del, panel);
+        row.append(colSel, opSel, wrap, caret, del, panel);
         this.bodyEl.append(row);
-        this.condEls.push({ colSel, input, panel });
+        this.condEls.push({ colSel, input, panel, syncChip });
       });
+      // 渲染完成后刷新一次色块显示（初始条件值可能就是颜色）
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => {
+          this.condEls.forEach(e => e.syncChip && e.syncChip());
+        });
+      }
 
       const add = make('button', 'obf-add', UI_TEXT.addCondition);
       add.type = 'button';

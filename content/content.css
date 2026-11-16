@@ -280,9 +280,32 @@
   width: 64px;
 }
 
-.obf-val {
+.obf-valwrap {
+  position: relative;
   flex: 1;
   min-width: 80px;
+  display: block;
+}
+
+.obf-valwrap .obf-val {
+  width: 100%;
+  display: block;
+  flex: none;
+  min-width: 0;
+}
+
+/* 筛选值为颜色时，输入框显示为色块（点击进入编辑） */
+.obf-valchip {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+  cursor: text;
+  display: none;
+  z-index: 2;
 }
 
 .obf-del {
