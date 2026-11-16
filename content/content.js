@@ -535,6 +535,7 @@
       this.adapter = adapter; // 表格适配器
       this.root = root;       // 用于插入工具栏的参考容器
       this.conditions = [this.newCondition()];
+      this.combine = 'and';   // 多条件组合：'and'（交集）| 'or'（并集）
       this.mode = 'filter';   // 'filter'（隐藏不匹配）| 'highlight'（高亮匹配）
       this.caseSensitive = false;
       this.headers = [];
@@ -594,6 +595,17 @@
       this.btnHighlight.addEventListener('click', () => this.setMode('highlight'));
       seg.append(this.btnFilter, this.btnHighlight);
 
+      // 条件组合方式：且（交集，需满足全部条件）/ 或（并集，满足任一条件即可）
+      this.btnCombine = make('button', 'obf-btn-icon obf-combine', '且');
+      this.btnCombine.type = 'button';
+      this.btnCombine.title = '多条件的组合方式（点击切换）：\n且 = 交集，需满足全部条件\n或 = 并集，满足任一条件即可';
+      this.btnCombine.addEventListener('click', () => {
+        this.combine = this.combine === 'and' ? 'or' : 'and';
+        this.btnCombine.textContent = this.combine === 'and' ? '且' : '或';
+        this.btnCombine.classList.toggle('obf-active', this.combine === 'or');
+        this.applyFilter();
+      });
+
       // 区分大小写
       this.btnCase = make('button', 'obf-btn-icon obf-case', UI_TEXT.caseSensitive);
       this.btnCase.type = 'button';
@@ -629,7 +641,7 @@
       brand.title = 'Onshape BOM Filter · 由 FRC 6907 The GOAT 制作\n未经授权请勿公开分发';
 
       head.append(this.titleEl, this.countEl, this.btnScan, spacer, seg,
-        this.btnCase, this.btnClear, brand, this.btnToggle);
+        this.btnCombine, this.btnCase, this.btnClear, brand, this.btnToggle);
 
       this.bodyEl = make('div', 'obf-body');
       toolbar.append(head, this.bodyEl);
@@ -871,22 +883,20 @@
     /* ---------- 过滤 ---------- */
 
     rowMatches(row, matchers) {
-      for (const { cond, fn } of matchers) {
-        if (cond.column === -1) {
+      const results = matchers.map(({ cond, fn }) => {
+        if (cond.column === -1) { // 任意列：命中任一单元格即可
           const n = this.adapter.getCellCount(row);
-          let any = false;
           for (let i = 0; i < n; i++) {
-            if (fn(this.adapter.getCellText(row, i))) {
-              any = true;
-              break;
-            }
+            if (fn(this.adapter.getCellText(row, i))) return true;
           }
-          if (!any) return false;
-        } else if (!fn(this.adapter.getCellText(row, cond.column))) {
           return false;
         }
-      }
-      return true;
+        return fn(this.adapter.getCellText(row, cond.column));
+      });
+      // 多条件组合：'and' = 交集（全部满足），'or' = 并集（满足任一）
+      return this.combine === 'or'
+        ? results.some(Boolean)
+        : results.every(Boolean);
     }
 
     applyFilter() {
@@ -971,14 +981,14 @@
 
     // 用快照文本评估条件（行已滚出 DOM、但统计仍需跟随筛选条件）
     snapshotMatches(texts, matchers) {
-      for (const { cond, fn } of matchers) {
-        if (cond.column === -1) {
-          if (!texts.some(t => fn(t))) return false;
-        } else if (!fn(texts[cond.column] || '')) {
-          return false;
-        }
-      }
-      return true;
+      const results = matchers.map(({ cond, fn }) => {
+        if (cond.column === -1) return texts.some(t => fn(t)); // 任意列
+        return fn(texts[cond.column] || '');
+      });
+      // 多条件组合：'and' = 交集（全部满足），'or' = 并集（满足任一）
+      return this.combine === 'or'
+        ? results.some(Boolean)
+        : results.every(Boolean);
     }
 
     /* ---------- 匹配结果列表（不受虚拟滚动限制） ---------- */

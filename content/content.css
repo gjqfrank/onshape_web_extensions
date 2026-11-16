@@ -228,6 +228,19 @@
   border-color: #0969da;
 }
 
+/* 条件组合方式：且（交集）/ 或（并集） */
+.obf-combine {
+  font-weight: 600;
+  min-width: 30px;
+  padding: 3px 6px;
+}
+
+.obf-combine.obf-active {
+  background: #1a7f37;
+  color: #fff;
+  border-color: #1a7f37;
+}
+
 .obf-body {
   margin-top: 6px;
   display: flex;
