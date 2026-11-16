@@ -1,12 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Onshape BOM Filter",
-  "version": "1.1.0",
-  "description": "在 Onshape 中打开 BOM（Bill of Materials）表时，按任意列属性（名称、零件编号、材料、颜色等）筛选或高亮零件行。纯 DOM 实现，不调用 Onshape API。Made by FRC 6907 The GOAT.",
+  "version": "1.1.1",
+  "description": "在 Onshape 中打开 BOM（Bill of Materials）表时，按任意列属性（名称、零件编号、材料、颜色等）筛选或高亮零件行。纯 DOM 实现，不调用 Onshape API。适用于 Microsoft Edge（Chromium 内核）。Made by FRC 6907 The GOAT.",
+  "minimum_chrome_version": "111",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "128": "icons/icon128.png",
+    "512": "icons/icon512.png"
   },
   "content_scripts": [
     {
